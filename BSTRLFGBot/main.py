@@ -195,7 +195,12 @@ class LFGModal(discord.ui.Modal):
         if lfg_role:
             overwrites[lfg_role] = discord.PermissionOverwrite(connect=True)
 
-        temp_vc = await guild.create_voice_channel(name=vc_name, overwrites=overwrites, category=lfg_category)
+        temp_vc = await guild.create_voice_channel(
+            name=vc_name,
+            overwrites=overwrites,
+            category=lfg_category,
+            user_limit=max_players  # apply max party size limit
+        )
         managed_vcs.add(temp_vc.id)
 
         embed = discord.Embed(title=embed_title, color=discord.Color.blue())
@@ -213,7 +218,7 @@ class LFGModal(discord.ui.Modal):
         view.msg = msg
         view.msg_id = msg.id
         await view.update_embed()
-        schedule_vc_inactivity(temp_vc, 900)
+        schedule_vc_inactivity(temp_vc, 60)  # LFG VC timer 60s
         bot.loop.create_task(delete_post_after_duration(temp_vc, msg, 86400))
         user_active_lfg[self.user.id] = msg.id
 
@@ -297,7 +302,7 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
     # Handle LFG VC inactivity
     if before.channel and before.channel.id in managed_vcs:
         if len(before.channel.members) == 0:
-            schedule_vc_inactivity(before.channel, 900)
+            schedule_vc_inactivity(before.channel, 60)  # LFG VC timer 60s
     if after.channel and after.channel.id in managed_vcs:
         task = vc_inactivity_tasks.get(after.channel.id)
         if task and not task.done():
@@ -326,7 +331,7 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
             managed_vcs.add(new_vc.id)
             user_join_create[member.id] = new_vc.id
             await member.move_to(new_vc)
-            schedule_vc_inactivity(new_vc, 900)
+            schedule_vc_inactivity(new_vc, 10)  # Join-to-Create VC timer 10s
         except Exception as e:
             print(f"Error creating Join-to-Create VC: {e}")
             await member.send("⚠️ Failed to create your VC. Check bot permissions.")
