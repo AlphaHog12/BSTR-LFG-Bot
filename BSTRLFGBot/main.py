@@ -53,7 +53,8 @@ async def delete_vc_safe(vc: discord.VoiceChannel):
             if vid == vc.id:
                 user_join_create.pop(uid, None)
 
-def schedule_vc_inactivity(vc: discord.VoiceChannel, delay: int = 900):
+def schedule_vc_inactivity(vc: discord.VoiceChannel, delay: int = 60):
+    """Schedules deletion of VC after delay if empty."""
     async def _wait_and_delete():
         try:
             await asyncio.sleep(delay)
@@ -115,7 +116,6 @@ class LFGSignupView(discord.ui.View):
             await interaction.response.send_message("You don’t have the LFG role.", ephemeral=True)
 
 @bot.command()
-@commands.has_role(OFFICER_ROLE)
 async def post_lfg_signup(ctx):
     embed = discord.Embed(
         title="📢 LFG Role Signup",
@@ -199,7 +199,7 @@ class LFGModal(discord.ui.Modal):
             name=vc_name,
             overwrites=overwrites,
             category=lfg_category,
-            user_limit=max_players  # apply max party size limit
+            user_limit=max_players
         )
         managed_vcs.add(temp_vc.id)
 
@@ -218,7 +218,7 @@ class LFGModal(discord.ui.Modal):
         view.msg = msg
         view.msg_id = msg.id
         await view.update_embed()
-        schedule_vc_inactivity(temp_vc, 60)  # LFG VC timer 60s
+        schedule_vc_inactivity(temp_vc, 60)
         bot.loop.create_task(delete_post_after_duration(temp_vc, msg, 86400))
         user_active_lfg[self.user.id] = msg.id
 
@@ -285,13 +285,9 @@ class DeployLFGView(discord.ui.View):
 
     @discord.ui.button(label="Create LFG Post", style=discord.ButtonStyle.primary)
     async def create_lfg_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if OFFICER_ROLE not in [role.name for role in interaction.user.roles]:
-            await interaction.response.send_message("Only Officers can create LFG posts!", ephemeral=True)
-            return
         await interaction.response.send_message("Select an activity:", view=ActivitySelectView(), ephemeral=True)
 
 @bot.command()
-@commands.has_role(OFFICER_ROLE)
 async def post_lfg_button(ctx):
     view = DeployLFGView()
     await ctx.send("Click the button below to create an LFG post:", view=view)
@@ -302,7 +298,7 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
     # Handle LFG VC inactivity
     if before.channel and before.channel.id in managed_vcs:
         if len(before.channel.members) == 0:
-            schedule_vc_inactivity(before.channel, 60)  # LFG VC timer 60s
+            schedule_vc_inactivity(before.channel, 60)
     if after.channel and after.channel.id in managed_vcs:
         task = vc_inactivity_tasks.get(after.channel.id)
         if task and not task.done():
@@ -331,7 +327,7 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
             managed_vcs.add(new_vc.id)
             user_join_create[member.id] = new_vc.id
             await member.move_to(new_vc)
-            schedule_vc_inactivity(new_vc, 10)  # Join-to-Create VC timer 10s
+            schedule_vc_inactivity(new_vc, 10)  # 10 seconds inactivity for join-to-create
         except Exception as e:
             print(f"Error creating Join-to-Create VC: {e}")
             await member.send("⚠️ Failed to create your VC. Check bot permissions.")
@@ -341,7 +337,6 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
 async def on_ready():
     bot.add_view(LFGSignupView())
     print(f"✅ Logged in as {bot.user}")
-
 
 webserver.keep_alive()
 bot.run(TOKEN, log_handler=handler, log_level=logging.DEBUG)
