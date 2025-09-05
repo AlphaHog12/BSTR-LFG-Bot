@@ -24,7 +24,6 @@ LFG_ROLE = "LFG"
 OFFICER_ROLE = "Officers"
 
 # Channels & Category (replace with your IDs)
-DEPLOY_CHANNEL_ID = 1413578264135467098
 ALERT_CHANNEL_ID = 1413578336810172426
 LFG_CATEGORY_ID = 1413571331202617374
 JOIN_TO_CREATE_CHANNEL_ID = 1413590729942503474
@@ -54,20 +53,15 @@ async def delete_vc_safe(vc: discord.VoiceChannel):
                 user_join_create.pop(uid, None)
 
 def schedule_vc_inactivity(vc: discord.VoiceChannel, delay: int = 60):
-    """Schedules deletion of VC after delay if empty."""
     async def _wait_and_delete():
         try:
             await asyncio.sleep(delay)
-            if not vc or not vc.guild:
-                return
             current = vc.guild.get_channel(vc.id)
             if not isinstance(current, discord.VoiceChannel):
                 return
             if len(current.members) == 0:
                 await delete_vc_safe(current)
         except asyncio.CancelledError:
-            pass
-        except Exception:
             pass
     old = vc_inactivity_tasks.get(vc.id)
     if old and not old.done():
@@ -86,25 +80,13 @@ async def delete_post_after_duration(vc: discord.VoiceChannel | None, msg: disco
     except asyncio.CancelledError:
         pass
 
-# --- LFG Signup ---
-class LFGSignupView(discord.ui.View):
+# --- LFG Role Toggle ---
+class LFGToggleView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="Enlist", style=discord.ButtonStyle.success, custom_id="lfg_enlist")
-    async def enlist(self, interaction: discord.Interaction, button: discord.ui.Button):
-        role = discord.utils.get(interaction.guild.roles, name=LFG_ROLE)
-        if not role:
-            await interaction.response.send_message("⚠️ LFG role not found.", ephemeral=True)
-            return
-        if role in interaction.user.roles:
-            await interaction.response.send_message("You’re already enlisted!", ephemeral=True)
-        else:
-            await interaction.user.add_roles(role)
-            await interaction.response.send_message(f"✅ You have been enlisted into {role.mention}!", ephemeral=True)
-
-    @discord.ui.button(label="Unenlist", style=discord.ButtonStyle.danger, custom_id="lfg_unenlist")
-    async def unenlist(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="Enlist/Unenlist", style=discord.ButtonStyle.primary, custom_id="lfg_toggle")
+    async def toggle_role(self, interaction: discord.Interaction, button: discord.ui.Button):
         role = discord.utils.get(interaction.guild.roles, name=LFG_ROLE)
         if not role:
             await interaction.response.send_message("⚠️ LFG role not found.", ephemeral=True)
@@ -113,51 +95,29 @@ class LFGSignupView(discord.ui.View):
             await interaction.user.remove_roles(role)
             await interaction.response.send_message(f"❌ You have been unenlisted from {role.mention}.", ephemeral=True)
         else:
-            await interaction.response.send_message("You don’t have the LFG role.", ephemeral=True)
+            await interaction.user.add_roles(role)
+            await interaction.response.send_message(f"✅ You have been enlisted into {role.mention}!", ephemeral=True)
 
 @bot.command()
 async def post_lfg_signup(ctx):
     embed = discord.Embed(
         title="📢 LFG Role Signup",
-        description="Click **Enlist** to get the LFG role and receive notifications for new groups.\nClick **Unenlist** if you no longer want to be notified.",
+        description="Click the button to **toggle enlistment**.\nIf enlisted, you’ll receive notifications for new groups.",
         color=discord.Color.blue()
     )
-    view = LFGSignupView()
+    view = LFGToggleView()
     await ctx.send(embed=embed, view=view)
-
-# --- Activity Selection ---
-class ActivitySelect(discord.ui.Select):
-    def __init__(self):
-        options = [
-            discord.SelectOption(label="Contracts - Combat"),
-            discord.SelectOption(label="Contracts - Cargo"),
-            discord.SelectOption(label="PVP"),
-            discord.SelectOption(label="Piracy"),
-            discord.SelectOption(label="Industry - Salvage"),
-            discord.SelectOption(label="Industry - Cargo"),
-            discord.SelectOption(label="Other - Explain in Notes")
-        ]
-        super().__init__(placeholder="Choose an activity...", options=options, custom_id="lfg_activity")
-
-    async def callback(self, interaction: discord.Interaction):
-        await interaction.response.send_modal(LFGModal(self.values[0], interaction.user))
-
-class ActivitySelectView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-        self.add_item(ActivitySelect())
 
 # --- LFG Modal & View ---
 class LFGModal(discord.ui.Modal):
-    def __init__(self, activity: str, user: discord.Member):
+    def __init__(self, user: discord.Member):
         super().__init__(title="Create LFG Post")
-        self.activity = activity
         self.user = user
-        self.ign = discord.ui.TextInput(label="Party Lead", placeholder="Player name")
-        self.notes = discord.ui.TextInput(label="Notes", placeholder="Optional notes", required=False)
-        self.max_players_input = discord.ui.TextInput(label="Max Party Size", placeholder="Enter a number", required=True)
-        self.add_item(self.ign)
-        self.add_item(self.notes)
+        self.host = discord.ui.TextInput(label="Host", placeholder="Who is leading the group?", required=True)
+        self.description = discord.ui.TextInput(label="Channel Description", placeholder="What is this squad doing?", required=True)
+        self.max_players_input = discord.ui.TextInput(label="Max Party Size (0 = unlimited)", placeholder="Enter a number", required=True)
+        self.add_item(self.host)
+        self.add_item(self.description)
         self.add_item(self.max_players_input)
 
     async def on_submit(self, interaction: discord.Interaction):
@@ -176,17 +136,13 @@ class LFGModal(discord.ui.Modal):
 
         try:
             max_players = int(self.max_players_input.value)
+            if max_players < 0:
+                raise ValueError
         except ValueError:
-            await interaction.response.send_message("⚠️ Max Party Size must be a number.", ephemeral=True)
+            await interaction.response.send_message("⚠️ Max Party Size must be a non-negative number.", ephemeral=True)
             return
 
-        # Use Notes for "Other" activity
-        if self.activity.lower().startswith("other") and self.notes.value.strip():
-            vc_name = self.notes.value.strip()
-            embed_title = self.notes.value.strip()
-        else:
-            vc_name = f"{self.activity} | {self.ign.value}"
-            embed_title = f"⚔️ {self.activity}"
+        user_limit = None if max_players == 0 else max_players
 
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(connect=True),
@@ -195,24 +151,25 @@ class LFGModal(discord.ui.Modal):
         if lfg_role:
             overwrites[lfg_role] = discord.PermissionOverwrite(connect=True)
 
+        vc_name = self.description.value.strip()
         temp_vc = await guild.create_voice_channel(
             name=vc_name,
             overwrites=overwrites,
             category=lfg_category,
-            user_limit=max_players
+            user_limit=user_limit
         )
         managed_vcs.add(temp_vc.id)
 
-        embed = discord.Embed(title=embed_title, color=discord.Color.blue())
-        embed.add_field(name="Host", value=self.user.mention, inline=False)
+        embed = discord.Embed(title=vc_name, color=discord.Color.blue())
+        embed.add_field(name="Host", value=self.host.value, inline=False)
         embed.add_field(name="Voice Channel", value=temp_vc.mention, inline=False)
-        initial_squad = [self.user]
-        embed.add_field(name="Current Squad", value=f"1/{max_players} {self.user.mention}", inline=False)
-        if self.notes.value.strip():
-            embed.add_field(name="Notes", value=self.notes.value, inline=False)
-        embed.add_field(name="Max Party Size", value=str(max_players), inline=False)
 
-        view = LFGView(msg_id=None, vc=temp_vc, max_players=max_players)
+        initial_squad = [self.user]
+        max_label = "∞" if max_players == 0 else str(max_players)
+        embed.add_field(name="Current Squad", value=f"1/{max_label} {self.user.mention}", inline=False)
+        embed.add_field(name="Max Party Size", value=max_label, inline=False)
+
+        view = LFGView(msg_id=None, vc=temp_vc, max_players=max_players, host_id=self.user.id, host_name=self.host.value)
         msg = await alert_channel.send(content=f"{lfg_role.mention if lfg_role else ''} Looking for group!", embed=embed, view=view)
         squads[msg.id] = initial_squad
         view.msg = msg
@@ -222,15 +179,22 @@ class LFGModal(discord.ui.Modal):
         bot.loop.create_task(delete_post_after_duration(temp_vc, msg, 86400))
         user_active_lfg[self.user.id] = msg.id
 
+        try:
+            await self.user.move_to(temp_vc)
+        except Exception:
+            pass
+
         await interaction.response.send_message("✅ Your LFG has been posted!", ephemeral=True)
 
 class LFGView(discord.ui.View):
-    def __init__(self, msg_id: int | None, vc: discord.VoiceChannel, max_players: int):
+    def __init__(self, msg_id: int | None, vc: discord.VoiceChannel, max_players: int, host_id: int, host_name: str):
         super().__init__(timeout=None)
         self.msg_id = msg_id
         self.vc = vc
         self.msg: discord.Message | None = None
         self.max_players = max_players
+        self.host_id = host_id
+        self.host_name = host_name
 
     async def update_embed(self):
         if not self.msg or not self.msg.embeds:
@@ -238,45 +202,68 @@ class LFGView(discord.ui.View):
         embed = self.msg.embeds[0].copy()
         squad = squads.get(self.msg_id, [])
         idx = next((i for i, f in enumerate(embed.fields) if f.name == "Current Squad"), None)
-        value = "\n".join([f"{i+1}/{self.max_players} {m.mention}" for i, m in enumerate(squad)]) or "Empty"
+
+        max_label = "∞" if self.max_players == 0 else str(self.max_players)
+        value = "\n".join([f"{i+1}/{max_label} {m.mention}" for i, m in enumerate(squad)]) or "Empty"
+
         if idx is not None:
             embed.set_field_at(idx, name="Current Squad", value=value, inline=False)
         else:
             embed.add_field(name="Current Squad", value=value, inline=False)
+
+        self.clear_items()
+
+        # Toggle Join/Leave
+        if any(m.id == self.host_id for m in squad) and (interaction_user := self.msg.guild.get_member(self.host_id)):
+            pass
+        if any(m.id == self.host_id for m in squad):
+            self.add_item(discord.ui.Button(label="Leave", style=discord.ButtonStyle.danger, custom_id="lfg_leave"))
+        else:
+            self.add_item(discord.ui.Button(label="Join", style=discord.ButtonStyle.success, custom_id="lfg_join"))
+
+        # Delete button for host + officers
+        delete_button = discord.ui.Button(label="Delete", style=discord.ButtonStyle.danger, custom_id="lfg_delete")
+        self.add_item(delete_button)
+
         await self.msg.edit(embed=embed, view=self)
 
-    @discord.ui.button(label="Join", style=discord.ButtonStyle.success)
-    async def join(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def interaction_check(self, interaction: discord.Interaction):
+        custom_id = interaction.data["custom_id"]
         squad = squads.get(self.msg_id, [])
-        if len(squad) >= self.max_players:
-            await interaction.response.send_message("⚠️ Party is full!", ephemeral=True)
-            return
-        if interaction.user not in squad:
-            squad.append(interaction.user)
+
+        if custom_id == "lfg_join":
+            if self.max_players != 0 and len(squad) >= self.max_players:
+                await interaction.response.send_message("⚠️ Party is full!", ephemeral=True)
+                return False
+            if interaction.user not in squad:
+                squad.append(interaction.user)
             squads[self.msg_id] = squad
-        await self.update_embed()
-        await interaction.response.defer()
+            await self.update_embed()
+            await interaction.response.defer()
+            return False
 
-    @discord.ui.button(label="Leave", style=discord.ButtonStyle.secondary)
-    async def leave(self, interaction: discord.Interaction, button: discord.ui.Button):
-        squad = squads.get(self.msg_id, [])
-        if interaction.user in squad:
-            squad.remove(interaction.user)
-        await self.update_embed()
-        await interaction.response.defer()
+        elif custom_id == "lfg_leave":
+            if interaction.user in squad:
+                squad.remove(interaction.user)
+            squads[self.msg_id] = squad
+            await self.update_embed()
+            await interaction.response.defer()
+            return False
 
-    @discord.ui.button(label="Delete", style=discord.ButtonStyle.danger)
-    async def delete(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if OFFICER_ROLE not in [role.name for role in interaction.user.roles] and interaction.user.id != self.msg.embeds[0].fields[0].value.id:
-            await interaction.response.send_message("Only Officers or Host can delete LFG posts.", ephemeral=True)
-            return
-        await delete_vc_safe(self.vc)
-        try:
-            await self.msg.delete()
-        except Exception:
-            pass
-        user_active_lfg.pop(interaction.user.id, None)
-        await interaction.response.send_message("✅ LFG post deleted.", ephemeral=True)
+        elif custom_id == "lfg_delete":
+            if OFFICER_ROLE not in [role.name for role in interaction.user.roles] and interaction.user.id != self.host_id:
+                await interaction.response.send_message("Only Officers or the Host can delete this LFG post.", ephemeral=True)
+                return False
+            await delete_vc_safe(self.vc)
+            try:
+                await self.msg.delete()
+            except Exception:
+                pass
+            user_active_lfg.pop(self.host_id, None)
+            await interaction.response.send_message("✅ LFG post deleted.", ephemeral=True)
+            return False
+
+        return True
 
 # --- Deploy Button ---
 class DeployLFGView(discord.ui.View):
@@ -285,7 +272,7 @@ class DeployLFGView(discord.ui.View):
 
     @discord.ui.button(label="Create LFG Post", style=discord.ButtonStyle.primary)
     async def create_lfg_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("Select an activity:", view=ActivitySelectView(), ephemeral=True)
+        await interaction.response.send_modal(LFGModal(interaction.user))
 
 @bot.command()
 async def post_lfg_button(ctx):
@@ -295,7 +282,6 @@ async def post_lfg_button(ctx):
 # --- Voice State Updates ---
 @bot.event
 async def on_voice_state_update(member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
-    # Handle LFG VC inactivity
     if before.channel and before.channel.id in managed_vcs:
         if len(before.channel.members) == 0:
             schedule_vc_inactivity(before.channel, 60)
@@ -304,7 +290,6 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
         if task and not task.done():
             task.cancel()
 
-    # --- Join-to-Create VC ---
     if after.channel and after.channel.id == JOIN_TO_CREATE_CHANNEL_ID:
         if member.id in user_join_create:
             await member.send("⚠️ You already have an active Join-to-Create VC!")
@@ -327,7 +312,7 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
             managed_vcs.add(new_vc.id)
             user_join_create[member.id] = new_vc.id
             await member.move_to(new_vc)
-            schedule_vc_inactivity(new_vc, 10)  # 10 seconds inactivity for join-to-create
+            schedule_vc_inactivity(new_vc, 10)
         except Exception as e:
             print(f"Error creating Join-to-Create VC: {e}")
             await member.send("⚠️ Failed to create your VC. Check bot permissions.")
@@ -335,8 +320,9 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
 # --- Bot Ready ---
 @bot.event
 async def on_ready():
-    bot.add_view(LFGSignupView())
+    bot.add_view(LFGToggleView())
     print(f"✅ Logged in as {bot.user}")
 
 webserver.keep_alive()
 bot.run(TOKEN, log_handler=handler, log_level=logging.DEBUG)
+
