@@ -19,9 +19,13 @@ intents.voice_states = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# --- Roles & Channels ---
-LFG_ROLE = "LFG"
-OFFICER_ROLE = "Officers"
+# --- Roles & Channels (replace with actual IDs) ---
+LFG_ROLE_ID = 1413522249742286948  # LFG role
+OFFICER_ROLE_IDS = [
+    911755541020311553,  #Eternal
+    1176539066569871531,   #High Council
+    1413165455421734985    #Bot Developer
+]
 ALERT_CHANNEL_ID = 1414759057121873950
 LFG_CATEGORY_ID = 1414750850701721703
 JOIN_TO_CREATE_CHANNEL_ID = 1413590729942503474
@@ -34,6 +38,9 @@ user_active_lfg: dict[int, int] = {}
 user_join_create: dict[int, int] = {}
 
 # --- Helpers ---
+def is_officer(member: discord.Member) -> bool:
+    return any(role.id in OFFICER_ROLE_IDS for role in member.roles)
+
 async def dm_admin(reason: str):
     """DMs the bot owner with an error."""
     try:
@@ -98,7 +105,7 @@ class LFGToggleView(discord.ui.View):
     @discord.ui.button(label="Enlist/Unenlist", style=discord.ButtonStyle.primary, custom_id="lfg_toggle")
     async def toggle_role(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
-            role = discord.utils.get(interaction.guild.roles, name=LFG_ROLE)
+            role = interaction.guild.get_role(LFG_ROLE_ID)
             if not role:
                 await interaction.response.send_message("⚠️ LFG role not found.", ephemeral=True)
                 return
@@ -154,13 +161,13 @@ class LFGModal(discord.ui.Modal):
         try:
             guild = interaction.guild
             alert_channel = guild.get_channel(ALERT_CHANNEL_ID)
-            lfg_role = discord.utils.get(guild.roles, name=LFG_ROLE)
+            lfg_role = guild.get_role(LFG_ROLE_ID)
             lfg_category = guild.get_channel(LFG_CATEGORY_ID)
             if not alert_channel or not lfg_category:
                 await interaction.response.send_message("⚠️ Setup issue, contact an Officer.", ephemeral=True)
                 return
 
-            if self.user.id in user_active_lfg and OFFICER_ROLE not in [r.name for r in self.user.roles]:
+            if self.user.id in user_active_lfg and not is_officer(self.user):
                 await interaction.response.send_message("⚠️ You already have an active LFG post.", ephemeral=True)
                 return
 
@@ -273,7 +280,7 @@ class LFGView(discord.ui.View):
                 await interaction.response.defer()
                 return False
             elif custom_id == "lfg_delete":
-                if OFFICER_ROLE not in [role.name for role in interaction.user.roles] and interaction.user.id != self.host_id:
+                if not is_officer(interaction.user) and interaction.user.id != self.host_id:
                     await interaction.response.send_message("Only Officers or the Host can delete this LFG post.", ephemeral=True)
                     return False
                 await delete_vc_safe(self.vc)
