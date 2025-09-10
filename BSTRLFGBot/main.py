@@ -22,15 +22,15 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 SERVERS = {
     "main": {
         "server_id": 911035631193444412,
-        "alert": 1414759155868110858,
+        "alert": 1414759057121873950,
         "posting": 1414497675667308564,  # Posting channel for deploy button
-        "lfg_category": 1414750850701721703,
+        "lfg_category": 1413590729942503474,
         "join_to_create": 1413590729942503474
     },
     "test": {
         "server_id": 1412815561477459991,
         "alert": 1413526136951935066,
-        "posting": 1413526136951935066,  # Posting channel for deploy button
+        "posting": 1413526066198216775,  # Posting channel for deploy button
         "lfg_category": 1413532598378172548,
         "join_to_create": 1413556559883276380
     }
