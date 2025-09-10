@@ -23,14 +23,14 @@ SERVERS = {
     "main": {
         "server_id": 911035631193444412,
         "alert": 1414759155868110858,
-        "posting": 1414757353613562029,  # Posting channel for deploy button
+        "posting": 1414497675667308564,  # Posting channel for deploy button
         "lfg_category": 1414750850701721703,
         "join_to_create": 1413590729942503474
     },
     "test": {
         "server_id": 1412815561477459991,
         "alert": 1413526136951935066,
-        "posting": 1412836700627144766,  # Posting channel for deploy button
+        "posting": 1413526136951935066,  # Posting channel for deploy button
         "lfg_category": 1413532598378172548,
         "join_to_create": 1413556559883276380
     }
@@ -281,4 +281,3 @@ async def on_ready():
 
 webserver.keep_alive()
 bot.run(TOKEN, log_handler=handler, log_level=logging.DEBUG)
-
