@@ -23,12 +23,14 @@ SERVERS = {
     "main": {
         "server_id": 911035631193444412,
         "alert": 1414759155868110858,
+        "posting": 1414757353613562029,  # Posting channel for deploy button
         "lfg_category": 1414750850701721703,
         "join_to_create": 1413590729942503474
     },
     "test": {
         "server_id": 1412815561477459991,
         "alert": 1413526136951935066,
+        "posting": 1412836700627144766,  # Posting channel for deploy button
         "lfg_category": 1413532598378172548,
         "join_to_create": 1413556559883276380
     }
@@ -81,6 +83,16 @@ def schedule_vc_inactivity(vc: discord.VoiceChannel, delay: int = 60):
     if old and not old.done():
         old.cancel()
     vc_inactivity_tasks[vc.id] = bot.loop.create_task(_wait_and_delete())
+
+# --- Deploy Button for Posting Channel ---
+class DeployLFGButtonView(discord.ui.View):
+    def __init__(self, guild_key):
+        super().__init__(timeout=None)
+        self.guild_key = guild_key
+
+    @discord.ui.button(label="Create LFG Post", style=discord.ButtonStyle.primary)
+    async def deploy_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(LFGModal(interaction.user, self.guild_key))
 
 # --- LFG Modal + View ---
 class LFGModal(discord.ui.Modal):
@@ -257,6 +269,16 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
+    # Auto-deploy persistent buttons in posting channels
+    for key, data in SERVERS.items():
+        posting_ch = bot.get_channel(data.get("posting"))
+        if posting_ch:
+            async for msg in posting_ch.history(limit=50):
+                if msg.author == bot.user and msg.components:
+                    break
+            else:
+                await posting_ch.send("Click below to create an LFG post:", view=DeployLFGButtonView(key))
 
 webserver.keep_alive()
 bot.run(TOKEN, log_handler=handler, log_level=logging.DEBUG)
+
