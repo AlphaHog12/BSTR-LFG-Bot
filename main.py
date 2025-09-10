@@ -22,9 +22,9 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # --- Roles & Channels (replace with actual IDs) ---
 LFG_ROLE_ID = 1413522249742286948  # LFG role
 OFFICER_ROLE_IDS = [
-    911755541020311553,  #Eternal
-    1176539066569871531,   #High Council
-    1413165455421734985    #Bot Developer
+    911755541020311553,  # Eternal
+    1176539066569871531,   # High Council
+    1413165455421734985    # Bot Developer
 ]
 ALERT_CHANNEL_ID = 1414759057121873950
 LFG_CATEGORY_ID = 1414750850701721703
@@ -42,7 +42,6 @@ def is_officer(member: discord.Member) -> bool:
     return any(role.id in OFFICER_ROLE_IDS for role in member.roles)
 
 async def dm_admin(reason: str):
-    """DMs the bot owner with an error."""
     try:
         owner = (await bot.application_info()).owner
         await owner.send(f"⚠️ LFG Bot Error: {reason}")
@@ -208,7 +207,7 @@ class LFGModal(discord.ui.Modal):
             await view.update_embed()
 
             schedule_vc_inactivity(temp_vc, 60)
-            bot.loop.create_task(delete_post_after_duration(temp_vc, msg, 86400))
+            asyncio.create_task(delete_post_after_duration(temp_vc, msg, 86400))
             user_active_lfg[self.user.id] = msg.id
 
             try:
@@ -246,14 +245,19 @@ class LFGView(discord.ui.View):
                 embed.set_field_at(idx, name="Current Squad", value=value, inline=False)
             else:
                 embed.add_field(name="Current Squad", value=value, inline=False)
+
+            # Clear buttons and rebuild per user
             self.clear_items()
-            # Add Join/Leave buttons
-            if any(m.id == self.host_id for m in squad):
-                self.add_item(discord.ui.Button(label="Leave", style=discord.ButtonStyle.danger, custom_id="lfg_leave"))
-            else:
+            for member in squad:
+                # Only add Leave button to the member themselves
+                if member.id == self.host_id:
+                    self.add_item(discord.ui.Button(label="Leave", style=discord.ButtonStyle.danger, custom_id="lfg_leave"))
+            # Everyone else sees Join if not full
+            if len(squad) < self.max_players or self.max_players == 0:
                 self.add_item(discord.ui.Button(label="Join", style=discord.ButtonStyle.success, custom_id="lfg_join"))
-            # Delete button
+            # Host and officers see Delete
             self.add_item(discord.ui.Button(label="Delete", style=discord.ButtonStyle.danger, custom_id="lfg_delete"))
+
             await self.msg.edit(embed=embed, view=self)
         except Exception as e:
             await dm_admin(f"LFGView update_embed failed: {e}")
@@ -262,6 +266,7 @@ class LFGView(discord.ui.View):
         try:
             custom_id = interaction.data["custom_id"]
             squad = squads.get(self.msg_id, [])
+
             if custom_id == "lfg_join":
                 if self.max_players != 0 and len(squad) >= self.max_players:
                     await interaction.response.send_message("⚠️ Party is full!", ephemeral=True)
@@ -272,6 +277,7 @@ class LFGView(discord.ui.View):
                 await self.update_embed()
                 await interaction.response.defer()
                 return False
+
             elif custom_id == "lfg_leave":
                 if interaction.user in squad:
                     squad.remove(interaction.user)
@@ -279,6 +285,7 @@ class LFGView(discord.ui.View):
                 await self.update_embed()
                 await interaction.response.defer()
                 return False
+
             elif custom_id == "lfg_delete":
                 if not is_officer(interaction.user) and interaction.user.id != self.host_id:
                     await interaction.response.send_message("Only Officers or the Host can delete this LFG post.", ephemeral=True)
@@ -291,6 +298,7 @@ class LFGView(discord.ui.View):
                 user_active_lfg.pop(self.host_id, None)
                 await interaction.response.send_message("✅ LFG post deleted.", ephemeral=True)
                 return False
+
             return True
         except Exception as e:
             await dm_admin(f"LFGView interaction_check failed: {e}")
@@ -338,4 +346,5 @@ async def on_ready():
 # --- Keep alive & run ---
 webserver.keep_alive()
 bot.run(TOKEN, log_handler=handler, log_level=logging.DEBUG)
+
 
