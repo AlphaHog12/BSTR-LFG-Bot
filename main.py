@@ -20,11 +20,11 @@ intents.voice_states = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # --- Roles & Channels (replace with actual IDs) ---
-LFG_ROLE_ID = 1413522249742286948  # LFG role
+LFG_ROLE_ID = 1413522249742286948
 OFFICER_ROLE_IDS = [
-    911755541020311553,  # Eternal
-    1176539066569871531,   # High Council
-    1413165455421734985    # Bot Developer
+    911755541020311553,
+    1176539066569871531,
+    1413165455421734985
 ]
 ALERT_CHANNEL_ID = 1414759057121873950
 LFG_CATEGORY_ID = 1414750850701721703
@@ -116,7 +116,10 @@ class LFGToggleView(discord.ui.View):
                 await interaction.response.send_message(f"✅ You have been enlisted into {role.mention}!", ephemeral=True)
         except Exception as e:
             await dm_admin(f"LFGToggleView failed: {e}")
-            await interaction.response.send_message("⚠️ Something went wrong.", ephemeral=True)
+            try:
+                await interaction.followup.send("⚠️ Something went wrong.", ephemeral=True)
+            except:
+                pass
 
 @bot.command()
 async def post_lfg_signup(ctx):
@@ -138,7 +141,10 @@ class DeployLFGView(discord.ui.View):
             await interaction.response.send_modal(LFGModal(interaction.user))
         except Exception as e:
             await dm_admin(f"DeployLFGView failed: {e}")
-            await interaction.response.send_message("⚠️ Could not open modal.", ephemeral=True)
+            try:
+                await interaction.followup.send("⚠️ Could not open modal.", ephemeral=True)
+            except:
+                pass
 
 @bot.command()
 async def post_lfg_button(ctx):
@@ -171,8 +177,6 @@ class LFGModal(discord.ui.Modal):
                 return
 
             max_players = int(self.max_players_input.value)
-            if max_players < 0:
-                raise ValueError
             user_limit = None if max_players == 0 else max_players
 
             overwrites = {
@@ -198,18 +202,12 @@ class LFGModal(discord.ui.Modal):
             embed.add_field(name="Current Squad", value=f"1/{max_label} {self.user.mention}", inline=False)
             embed.add_field(name="Max Party Size", value=max_label, inline=False)
 
-            view = LFGView(msg_id=0, vc=temp_vc, max_players=max_players, host_id=self.user.id, host_name=self.host.value)
-            squads_placeholder = [self.user]  # temporary
-            squads[-1] = squads_placeholder  # temp key
-            # Send the message without a view first
+            # Send message first
             msg = await alert_channel.send(content=f"{lfg_role.mention if lfg_role else ''} Looking for group!", embed=embed)
-            # Assign correct msg_id and squad
-            view.msg = msg
-            view.msg_id = msg.id
+            # Save squad & view
             squads[msg.id] = [self.user]
-            squads.pop(-1)
-            await view.update_embed()
-            # Send proper view for host so buttons appear
+            view = LFGView(msg.id, temp_vc, max_players, self.user.id, self.host.value)
+            view.msg = msg
             await msg.edit(view=view.build_view_for(self.user))
 
             schedule_vc_inactivity(temp_vc, 60)
@@ -225,11 +223,14 @@ class LFGModal(discord.ui.Modal):
 
         except Exception as e:
             await dm_admin(f"LFGModal on_submit failed: {e}")
-            await interaction.response.send_message("⚠️ Failed to create LFG post.", ephemeral=True)
+            try:
+                await interaction.followup.send("⚠️ Failed to create LFG post.", ephemeral=True)
+            except:
+                pass
 
 # --- Dynamic LFG View ---
 class LFGView(discord.ui.View):
-    def __init__(self, msg_id: int | None, vc: discord.VoiceChannel, max_players: int, host_id: int, host_name: str):
+    def __init__(self, msg_id: int, vc: discord.VoiceChannel, max_players: int, host_id: int, host_name: str):
         super().__init__(timeout=None)
         self.msg_id = msg_id
         self.vc = vc
@@ -244,27 +245,25 @@ class LFGView(discord.ui.View):
         try:
             embed = self.msg.embeds[0].copy()
             squad = squads.get(self.msg_id, [])
-            idx = next((i for i, f in enumerate(embed.fields) if f.name == "Current Squad"), None)
             max_label = "∞" if self.max_players == 0 else str(self.max_players)
             value = "\n".join([f"{i+1}/{max_label} {m.mention}" for i, m in enumerate(squad)]) or "Empty"
-            if idx is not None:
-                embed.set_field_at(idx, name="Current Squad", value=value, inline=False)
-            else:
-                embed.add_field(name="Current Squad", value=value, inline=False)
+            for i, f in enumerate(embed.fields):
+                if f.name == "Current Squad":
+                    embed.set_field_at(i, name="Current Squad", value=value, inline=False)
+                    break
             await self.msg.edit(embed=embed)
         except Exception as e:
             await dm_admin(f"LFGView update_embed failed: {e}")
 
     def build_view_for(self, member: discord.Member):
-        view = LFGView(self.msg_id, self.vc, self.max_players, self.host_id, self.host_name)
-        view.msg = self.msg
+        view = discord.ui.View(timeout=None)
         squad = squads.get(self.msg_id, [])
         # Join/Leave buttons
         if member in squad:
             view.add_item(discord.ui.Button(label="Leave", style=discord.ButtonStyle.danger, custom_id="lfg_leave"))
         else:
             view.add_item(discord.ui.Button(label="Join", style=discord.ButtonStyle.success, custom_id="lfg_join"))
-        # Officers and host see Delete
+        # Delete button for host/officers only
         if is_officer(member) or member.id == self.host_id:
             view.add_item(discord.ui.Button(label="Delete", style=discord.ButtonStyle.danger, custom_id="lfg_delete"))
         return view
@@ -305,7 +304,10 @@ class LFGView(discord.ui.View):
             return True
         except Exception as e:
             await dm_admin(f"LFGView interaction_check failed: {e}")
-            await interaction.response.send_message("⚠️ Something went wrong.", ephemeral=True)
+            try:
+                await interaction.followup.send("⚠️ Something went wrong.", ephemeral=True)
+            except:
+                pass
             return False
 
 # --- Voice State Handling ---
@@ -345,6 +347,7 @@ async def on_ready():
     bot.add_view(LFGToggleView())
     bot.add_view(DeployLFGView())
     print(f"✅ Logged in as {bot.user}")
+
 # --- Keep alive & run ---
 webserver.keep_alive()
 bot.run(TOKEN, log_handler=handler, log_level=logging.DEBUG)
