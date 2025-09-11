@@ -162,66 +162,58 @@ class LFGModal(discord.ui.Modal):
 
 # --- LFG View ---
 class LFGView(discord.ui.View):
-    def __init__(self, msg_id: int | None, vc: discord.VoiceChannel, max_players: int, host_id: int):
+    def __init__(self, msg_id: int, host_id: int, max_players: int):
         super().__init__(timeout=None)
         self.msg_id = msg_id
-        self.vc = vc
-        self.msg: discord.Message | None = None
-        self.max_players = max_players
         self.host_id = host_id
+        self.max_players = max_players
 
-    async def update_embed(self):
-        if not self.msg or not self.msg.embeds:
-            return
-        embed = self.msg.embeds[0].copy()
-        guild_id = self.msg.guild.id
+    async def update_embed(self, msg: discord.Message):
+        guild_id = msg.guild.id
         squad = squads.get(guild_id, {}).get(self.msg_id, [])
+        embed = msg.embeds[0].copy()
         max_label = "∞" if self.max_players == 0 else str(self.max_players)
         value = "\n".join([f"{i+1}/{max_label} {m.mention}" for i, m in enumerate(squad)]) or "Empty"
         for i, f in enumerate(embed.fields):
             if f.name == "Current Squad":
                 embed.set_field_at(i, name="Current Squad", value=value, inline=False)
-                break
-        await self.msg.edit(embed=embed)
+        await msg.edit(embed=embed)
 
-    async def interaction_check(self, interaction: discord.Interaction):
-        custom_id = interaction.data.get("custom_id")
+    @discord.ui.button(label="Join", style=discord.ButtonStyle.success, custom_id="lfg_join")
+    async def join_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         guild_id = interaction.guild.id
         squad = squads.get(guild_id, {}).get(self.msg_id, [])
+        if self.max_players != 0 and len(squad) >= self.max_players:
+            await interaction.response.send_message("⚠️ Party full!", ephemeral=True)
+            return
+        if interaction.user not in squad:
+            squad.append(interaction.user)
+        squads[guild_id][self.msg_id] = squad
+        await self.update_embed(interaction.message)
+        await interaction.response.defer()
 
-        if custom_id == "lfg_join":
-            if self.max_players != 0 and len(squad) >= self.max_players:
-                await interaction.response.send_message("⚠️ Party is full!", ephemeral=True)
-                return False
-            if interaction.user not in squad:
-                squad.append(interaction.user)
-            squads[guild_id][self.msg_id] = squad
-            await self.update_embed()
-            await interaction.response.defer()
-            return False
+    @discord.ui.button(label="Leave", style=discord.ButtonStyle.danger, custom_id="lfg_leave")
+    async def leave_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        guild_id = interaction.guild.id
+        squad = squads.get(guild_id, {}).get(self.msg_id, [])
+        if interaction.user in squad:
+            squad.remove(interaction.user)
+        squads[guild_id][self.msg_id] = squad
+        await self.update_embed(interaction.message)
+        await interaction.response.defer()
 
-        elif custom_id == "lfg_leave":
-            if interaction.user in squad:
-                squad.remove(interaction.user)
-            squads[guild_id][self.msg_id] = squad
-            await self.update_embed()
-            await interaction.response.defer()
-            return False
-
-        elif custom_id == "lfg_delete":
-            if interaction.user.id != self.host_id and not is_officer(interaction.user):
-                await interaction.response.send_message("Only host or officers can delete.", ephemeral=True)
-                return False
-            if self.vc:
-                await delete_vc_safe(self.vc)
-            try:
-                await self.msg.delete()
-            except:
-                pass
-            user_active_lfg.pop(self.host_id, None)
-            return False
-
-        return True
+    @discord.ui.button(label="Delete", style=discord.ButtonStyle.danger, custom_id="lfg_delete")
+    async def delete_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.host_id and not is_officer(interaction.user):
+            await interaction.response.send_message("Only host or officers can delete.", ephemeral=True)
+            return
+        guild_id = interaction.guild.id
+        squads.get(guild_id, {}).pop(self.msg_id, None)
+        try:
+            await interaction.message.delete()
+        except:
+            pass
+        await interaction.response.send_message("✅ LFG post deleted.", ephemeral=True)
 
 # --- Deploy Button ---
 class DeployLFGButtonView(discord.ui.View):
