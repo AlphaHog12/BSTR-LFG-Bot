@@ -68,7 +68,6 @@ async def delete_vc_safe(vc: discord.VoiceChannel):
         for uid, vid in list(user_join_create.items()):
             if vid == vc.id:
                 user_join_create.pop(uid, None)
-
         await vc.delete()
     except Exception as e:
         await dm_admin(f"Failed to delete VC {vc.name}: {e}")
@@ -113,6 +112,7 @@ class LFGModal(discord.ui.Modal):
             data = SERVERS[self.guild_key]
             alert_channel = guild.get_channel(data["alert"])
             lfg_category = guild.get_channel(data["lfg_category"])
+
             if self.user.id in user_active_lfg and not is_officer(self.user):
                 await interaction.response.send_message("⚠️ You already have an active LFG post.", ephemeral=True)
                 return
@@ -233,6 +233,41 @@ class DeployLFGButtonView(discord.ui.View):
     async def deploy_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(LFGModal(interaction.user, self.guild_key))
 
+# --- Backup/Cleanup Command ---
+@bot.command()
+@commands.is_owner()
+async def refresh_lfg(ctx):
+    """
+    Removes old buttons/posts in posting channels and reposts a persistent "Create LFG Post" button.
+    """
+    try:
+        for guild_key, data in SERVERS.items():
+            guild = bot.get_guild(data["server_id"])
+            if not guild:
+                continue
+
+            post_channel = guild.get_channel(data["posting"])
+            if not post_channel:
+                continue
+
+            # Remove old buttons in posting channel
+            messages = [msg async for msg in post_channel.history(limit=100)]
+            for msg in messages:
+                if msg.components:
+                    try:
+                        await msg.edit(view=None)
+                    except:
+                        pass
+
+            # Post fresh "Create LFG Post" button
+            view = DeployLFGButtonView(guild_key)
+            await post_channel.send("Click the button below to create an LFG post!", view=view)
+
+        await ctx.send("✅ LFG cleanup complete and new buttons posted in posting channels!")
+    except Exception as e:
+        await dm_admin(f"refresh_lfg command failed: {e}")
+        await ctx.send(f"⚠️ Failed to refresh LFG: {e}")
+
 # --- Voice State Updates ---
 @bot.event
 async def on_voice_state_update(member, before, after):
@@ -243,13 +278,16 @@ async def on_voice_state_update(member, before, after):
             task = vc_inactivity_tasks.get(after.channel.id)
             if task and not task.done():
                 task.cancel()
+
         for key, data in SERVERS.items():
             join_to_create = data["join_to_create"]
             if after.channel and after.channel.id == join_to_create:
                 if member.id in user_join_create:
                     await member.send("⚠️ You already have an active VC!")
-                    try: await member.move_to(before.channel)
-                    except: pass
+                    try:
+                        await member.move_to(before.channel)
+                    except:
+                        pass
                     return
                 overwrites = {
                     member.guild.default_role: discord.PermissionOverwrite(connect=True),
@@ -273,4 +311,4 @@ async def on_ready():
 
 # --- Keep bot alive & run ---
 webserver.keep_alive()
-bot.run(TOKEN)
+bot.run(TOKEN, log_level=logging.DEBUG)
