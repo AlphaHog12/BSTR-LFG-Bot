@@ -89,7 +89,7 @@ class LFGView(discord.ui.View):
     def __init__(self, msg_id, vc, max_players, host_id, host_name, guild_id):
         super().__init__(timeout=None)  # Persistent
         self.msg_id = msg_id
-        self.vc = vc
+        self.vc = vc  # Can be None if VC deleted
         self.msg: discord.Message | None = None
         self.max_players = max_players
         self.host_id = host_id
@@ -113,11 +113,11 @@ class LFGView(discord.ui.View):
         view = discord.ui.View(timeout=None)
         squad = squads[self.guild_id].get(self.msg_id, [])
 
-        # Show Leave if the member is in the squad, otherwise Join
-        if member in squad:
-            view.add_item(discord.ui.Button(label="Leave", style=discord.ButtonStyle.danger, custom_id="lfg_leave"))
-        else:
+        # Show Join if member NOT in squad, else Leave
+        if member not in squad:
             view.add_item(discord.ui.Button(label="Join", style=discord.ButtonStyle.success, custom_id="lfg_join"))
+        else:
+            view.add_item(discord.ui.Button(label="Leave", style=discord.ButtonStyle.danger, custom_id="lfg_leave"))
 
         # Delete button for officers or host
         if is_officer(member) or member.id == self.host_id:
@@ -134,6 +134,7 @@ class LFGView(discord.ui.View):
         custom_id = interaction.data.get("custom_id")
         squad = squads[self.guild_id].get(self.msg_id, [])
 
+        # Join
         if custom_id == "lfg_join":
             if self.max_players != 0 and len(squad) >= self.max_players:
                 await interaction.followup.send("⚠️ Party is full!", ephemeral=True)
@@ -145,6 +146,7 @@ class LFGView(discord.ui.View):
             await interaction.followup.edit_message(self.msg.id, view=self.build_view_for(interaction.user))
             return False
 
+        # Leave
         elif custom_id == "lfg_leave":
             if interaction.user in squad:
                 squad.remove(interaction.user)
@@ -153,15 +155,26 @@ class LFGView(discord.ui.View):
             await interaction.followup.edit_message(self.msg.id, view=self.build_view_for(interaction.user))
             return False
 
+        # Delete
         elif custom_id == "lfg_delete":
             if not is_officer(interaction.user) and interaction.user.id != self.host_id:
                 await interaction.followup.send("Only Officers or the Host can delete this LFG post.", ephemeral=True)
                 return False
-            await delete_vc_safe(self.vc)
+
+            # Safe VC deletion
+            if self.vc:
+                try:
+                    await delete_vc_safe(self.vc)
+                except Exception as e:
+                    await dm_admin(f"Failed to delete VC {self.vc.id} (may already be gone): {e}")
+
+            # Delete the LFG message
             try:
                 await self.msg.delete()
             except:
                 pass
+
+            # Remove from tracking
             user_active_lfg.pop(self.host_id, None)
             self.stop()
             return False
@@ -278,13 +291,13 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
 async def on_ready():
     print(f"Logged in as {bot.user}")
 
-    # Deploy persistent buttons in posting channels
+    # Reattach deploy buttons in posting channels
     for key, data in SERVERS.items():
         posting_ch = bot.get_channel(data.get("posting"))
         if posting_ch:
             async for msg in posting_ch.history(limit=50):
                 if msg.author == bot.user and msg.components:
-                    # Reattach deploy button
+                    # Reattach deploy button view
                     await msg.edit(view=DeployLFGButtonView(key))
                     break
             else:
@@ -293,9 +306,10 @@ async def on_ready():
     # Reattach LFG views for active posts
     for guild_id, posts in squads.items():
         guild = bot.get_guild(guild_id)
-        for msg_id, members in posts.items():
-            if not members:
+        for msg_id, squad_data in posts.items():
+            if not squad_data["members"]:
                 continue
+            # Fetch alert channel
             alert_channel = None
             for key, data in SERVERS.items():
                 if data["server_id"] == guild_id:
@@ -303,13 +317,21 @@ async def on_ready():
                     break
             if not alert_channel:
                 continue
+
             try:
                 msg = await alert_channel.fetch_message(msg_id)
-                view = LFGView(msg_id, None, 0, members[0].id, members[0].display_name, guild_id)
+                vc = None
+                if "vc_id" in squad_data:
+                    vc = guild.get_channel(squad_data["vc_id"])
+                view = LFGView(msg_id, vc, squad_data.get("max_players", 0),
+                               squad_data["members"][0].id,
+                               squad_data["members"][0].display_name,
+                               guild_id)
                 view.msg = msg
-                await msg.edit(view=view.build_view_for(members[0]))
+                await msg.edit(view=view.build_view_for(squad_data["members"][0]))
             except:
                 continue
+
 
 # --- Run Bot ---
 webserver.keep_alive()
