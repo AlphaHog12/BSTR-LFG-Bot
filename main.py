@@ -44,7 +44,7 @@ OFFICER_ROLE_IDS = [
 ]
 
 # --- Storage ---
-squads = {}               # {guild_id: {msg_id: [members]}}
+squads = {}               # {guild_id: {msg_id: {"members": [...], "vc_id": int, "max_players": int}}}
 managed_vcs = set()        # {vc.id}
 vc_inactivity_tasks = {}   # {vc.id: asyncio.Task}
 user_active_lfg = {}       # {user.id: msg_id}
@@ -100,9 +100,10 @@ class LFGView(discord.ui.View):
         if not self.msg or not self.msg.embeds:
             return
         embed = self.msg.embeds[0].copy()
-        squad = squads[self.guild_id].get(self.msg_id, [])
+        squad_data = squads[self.guild_id].get(self.msg_id, {})
+        members = squad_data.get("members", [])
         max_label = "∞" if self.max_players == 0 else str(self.max_players)
-        value = "\n".join([f"{i+1}/{max_label} {m.mention}" for i, m in enumerate(squad)]) or "Empty"
+        value = "\n".join([f"{i+1}/{max_label} {m.mention}" for i, m in enumerate(members)]) or "Empty"
         for i, f in enumerate(embed.fields):
             if f.name == "Current Squad":
                 embed.set_field_at(i, name="Current Squad", value=value, inline=False)
@@ -111,10 +112,11 @@ class LFGView(discord.ui.View):
 
     def build_view_for(self, member: discord.Member):
         view = discord.ui.View(timeout=None)
-        squad = squads[self.guild_id].get(self.msg_id, [])
+        squad_data = squads[self.guild_id].get(self.msg_id, {})
+        members = squad_data.get("members", [])
 
         # Show Join if member NOT in squad, else Leave
-        if member not in squad:
+        if member not in members:
             view.add_item(discord.ui.Button(label="Join", style=discord.ButtonStyle.success, custom_id="lfg_join"))
         else:
             view.add_item(discord.ui.Button(label="Leave", style=discord.ButtonStyle.danger, custom_id="lfg_leave"))
@@ -132,25 +134,28 @@ class LFGView(discord.ui.View):
             return False
 
         custom_id = interaction.data.get("custom_id")
-        squad = squads[self.guild_id].get(self.msg_id, [])
+        squad_data = squads[self.guild_id].get(self.msg_id, {})
+        members = squad_data.get("members", [])
 
         # Join
         if custom_id == "lfg_join":
-            if self.max_players != 0 and len(squad) >= self.max_players:
+            if self.max_players != 0 and len(members) >= self.max_players:
                 await interaction.followup.send("⚠️ Party is full!", ephemeral=True)
                 return False
-            if interaction.user not in squad:
-                squad.append(interaction.user)
-                squads[self.guild_id][self.msg_id] = squad
+            if interaction.user not in members:
+                members.append(interaction.user)
+                squad_data["members"] = members
+                squads[self.guild_id][self.msg_id] = squad_data
             await self.update_embed()
             await interaction.followup.edit_message(self.msg.id, view=self.build_view_for(interaction.user))
             return False
 
         # Leave
         elif custom_id == "lfg_leave":
-            if interaction.user in squad:
-                squad.remove(interaction.user)
-                squads[self.guild_id][self.msg_id] = squad
+            if interaction.user in members:
+                members.remove(interaction.user)
+                squad_data["members"] = members
+                squads[self.guild_id][self.msg_id] = squad_data
             await self.update_embed()
             await interaction.followup.edit_message(self.msg.id, view=self.build_view_for(interaction.user))
             return False
@@ -228,7 +233,11 @@ class LFGModal(discord.ui.Modal):
         guild_id = guild.id
         if guild_id not in squads:
             squads[guild_id] = {}
-        squads[guild_id][msg.id] = [self.user]
+        squads[guild_id][msg.id] = {
+            "members": [self.user],
+            "vc_id": temp_vc.id,
+            "max_players": max_players
+        }
 
         view = LFGView(msg.id, temp_vc, max_players, self.user.id, self.host.value, guild_id)
         view.msg = msg
@@ -297,7 +306,6 @@ async def on_ready():
         if posting_ch:
             async for msg in posting_ch.history(limit=50):
                 if msg.author == bot.user and msg.components:
-                    # Reattach deploy button view
                     await msg.edit(view=DeployLFGButtonView(key))
                     break
             else:
@@ -307,9 +315,9 @@ async def on_ready():
     for guild_id, posts in squads.items():
         guild = bot.get_guild(guild_id)
         for msg_id, squad_data in posts.items():
-            if not squad_data["members"]:
+            members = squad_data.get("members", [])
+            if not members:
                 continue
-            # Fetch alert channel
             alert_channel = None
             for key, data in SERVERS.items():
                 if data["server_id"] == guild_id:
@@ -317,21 +325,15 @@ async def on_ready():
                     break
             if not alert_channel:
                 continue
-
             try:
                 msg = await alert_channel.fetch_message(msg_id)
-                vc = None
-                if "vc_id" in squad_data:
-                    vc = guild.get_channel(squad_data["vc_id"])
+                vc = guild.get_channel(squad_data.get("vc_id"))
                 view = LFGView(msg_id, vc, squad_data.get("max_players", 0),
-                               squad_data["members"][0].id,
-                               squad_data["members"][0].display_name,
-                               guild_id)
+                               members[0].id, members[0].display_name, guild_id)
                 view.msg = msg
-                await msg.edit(view=view.build_view_for(squad_data["members"][0]))
+                await msg.edit(view=view.build_view_for(members[0]))
             except:
                 continue
-
 
 # --- Run Bot ---
 webserver.keep_alive()
