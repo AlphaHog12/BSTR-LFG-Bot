@@ -109,19 +109,16 @@ class LFGView(discord.ui.View):
                 break
         await self.msg.edit(embed=embed)
 
-    def build_view_for(self, member: discord.Member):
-        view = discord.ui.View(timeout=None)
+    def refresh_buttons(self, member: discord.Member):
+        # Clear existing buttons and add the correct ones
+        self.clear_items()
         squad = squads[self.guild_id].get(self.msg_id, [])
-
         if member in squad:
-            view.add_item(discord.ui.Button(label="Leave", style=discord.ButtonStyle.danger, custom_id="lfg_leave"))
+            self.add_item(discord.ui.Button(label="Leave", style=discord.ButtonStyle.danger, custom_id="lfg_leave"))
         else:
-            view.add_item(discord.ui.Button(label="Join", style=discord.ButtonStyle.success, custom_id="lfg_join"))
-
+            self.add_item(discord.ui.Button(label="Join", style=discord.ButtonStyle.success, custom_id="lfg_join"))
         if is_officer(member) or member.id == self.host_id:
-            view.add_item(discord.ui.Button(label="Delete", style=discord.ButtonStyle.danger, custom_id="lfg_delete"))
-
-        return view
+            self.add_item(discord.ui.Button(label="Delete", style=discord.ButtonStyle.danger, custom_id="lfg_delete"))
 
     async def interaction_check(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
@@ -138,17 +135,17 @@ class LFGView(discord.ui.View):
                 return False
             if interaction.user not in squad:
                 squad.append(interaction.user)
-                squads[self.guild_id][self.msg_id] = squad
             await self.update_embed()
-            await interaction.followup.edit_message(self.msg.id, view=self.build_view_for(interaction.user))
+            self.refresh_buttons(interaction.user)
+            await interaction.followup.edit_message(self.msg.id, view=self)
             return False
 
         elif custom_id == "lfg_leave":
             if interaction.user in squad:
                 squad.remove(interaction.user)
-                squads[self.guild_id][self.msg_id] = squad
             await self.update_embed()
-            await interaction.followup.edit_message(self.msg.id, view=self.build_view_for(interaction.user))
+            self.refresh_buttons(interaction.user)
+            await interaction.followup.edit_message(self.msg.id, view=self)
             return False
 
         elif custom_id == "lfg_delete":
@@ -210,6 +207,7 @@ class LFGModal(discord.ui.Modal):
         embed.add_field(name="Max Party Size", value=max_label, inline=False)
 
         msg = await alert_channel.send(content=f"{self.user.mention} is looking for a group!", embed=embed)
+
         guild_id = guild.id
         if guild_id not in squads:
             squads[guild_id] = {}
@@ -217,7 +215,8 @@ class LFGModal(discord.ui.Modal):
 
         view = LFGView(msg.id, temp_vc, max_players, self.user.id, self.host.value, guild_id)
         view.msg = msg
-        await msg.edit(view=view.build_view_for(self.user))
+        view.refresh_buttons(self.user)
+        await msg.edit(view=view)
 
         schedule_vc_inactivity(temp_vc, 60)
         user_active_lfg[self.user.id] = msg.id
@@ -271,12 +270,32 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
     except Exception as e:
         await dm_admin(f"on_voice_state_update failed for {member}: {e}")
 
+# --- Backup command to deploy button ---
+@bot.command(name="deploylfg")
+@commands.has_permissions(administrator=True)
+async def deploy_lfg_button(ctx, server_key: str):
+    if server_key not in SERVERS:
+        await ctx.send(f"❌ Invalid server key. Valid keys: {', '.join(SERVERS.keys())}")
+        return
+
+    posting_ch = bot.get_channel(SERVERS[server_key]["posting"])
+    if not posting_ch:
+        await ctx.send("❌ Could not find the posting channel.")
+        return
+
+    async for msg in posting_ch.history(limit=50):
+        if msg.author == bot.user and msg.components:
+            await ctx.send("✅ LFG button already exists in this channel.")
+            return
+
+    await posting_ch.send("Click below to create an LFG post:", view=DeployLFGButtonView(server_key))
+    await ctx.send(f"✅ LFG button deployed in {posting_ch.mention}.")
+
 # --- On Ready ---
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
-
-    # Deploy persistent buttons in posting channels
+    # Restore persistent buttons automatically
     for key, data in SERVERS.items():
         posting_ch = bot.get_channel(data.get("posting"))
         if posting_ch:
