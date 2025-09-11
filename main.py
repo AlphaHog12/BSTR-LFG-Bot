@@ -94,6 +94,7 @@ def schedule_vc_inactivity(vc: discord.VoiceChannel, delay: int = 60):
     vc_inactivity_tasks[vc.id] = bot.loop.create_task(_wait_and_delete())
 
 # --- LFG Modal ---
+# --- LFG Modal ---
 class LFGModal(discord.ui.Modal):
     def __init__(self, user: discord.Member, guild_key: str):
         super().__init__(title="Create LFG Post")
@@ -120,17 +121,18 @@ class LFGModal(discord.ui.Modal):
             max_players = int(self.max_input.value)
             user_limit = None if max_players == 0 else max_players
 
+            # Create voice channel
             overwrites = {
                 guild.default_role: discord.PermissionOverwrite(connect=True),
                 guild.me: discord.PermissionOverwrite(connect=True, manage_channels=True)
             }
-
             vc_name = self.desc_input.value.strip()
             temp_vc = await guild.create_voice_channel(vc_name, overwrites=overwrites, category=lfg_category)
             if user_limit:
                 await temp_vc.edit(user_limit=user_limit)
             managed_vcs.add(temp_vc.id)
 
+            # Build embed
             embed = discord.Embed(title=vc_name, color=discord.Color.blue())
             embed.add_field(name="Host", value=self.host_input.value, inline=False)
             embed.add_field(name="Voice Channel", value=temp_vc.mention, inline=False)
@@ -138,11 +140,13 @@ class LFGModal(discord.ui.Modal):
             embed.add_field(name="Current Squad", value=f"1/{max_label} {self.user.mention}", inline=False)
             embed.add_field(name="Max Party Size", value=max_label, inline=False)
 
-            view = LFGView(msg_id=None, vc=temp_vc, max_players=max_players, host_id=self.user.id)
+            # Create LFG view WITHOUT vc reference
+            view = LFGView(msg_id=None, max_players=max_players, host_id=self.user.id)
             msg = await alert_channel.send(content=f"{self.user.mention} is looking for a group!", embed=embed, view=view)
             view.msg = msg
             view.msg_id = msg.id
 
+            # Track squads
             if guild.id not in squads:
                 squads[guild.id] = {}
             squads[guild.id][msg.id] = [self.user]
@@ -150,6 +154,7 @@ class LFGModal(discord.ui.Modal):
             schedule_vc_inactivity(temp_vc, 60)
             user_active_lfg[self.user.id] = msg.id
 
+            # Move user to VC
             try:
                 await self.user.move_to(temp_vc)
             except:
@@ -159,6 +164,7 @@ class LFGModal(discord.ui.Modal):
         except Exception as e:
             await dm_admin(f"LFGModal submit error: {e}")
             await interaction.response.send_message("⚠️ Failed to create LFG post.", ephemeral=True)
+
 
 # --- LFG View ---
 class LFGView(discord.ui.View):
