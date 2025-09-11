@@ -1,4 +1,0 @@
-discord.py
-python-dotenv
-Flask~=3.0.3
-discord~=2.3.2
