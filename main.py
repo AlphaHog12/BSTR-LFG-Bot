@@ -65,7 +65,7 @@ async def delete_vc_safe(vc: discord.VoiceChannel):
             if vid == vc.id:
                 user_join_create.pop(uid, None)
 
-        # Find the LFG post tied to this VC
+        # Disable buttons in linked LFG post
         for guild_id, posts in squads.items():
             for msg_id, squad_data in posts.items():
                 if squad_data.get("vc_id") == vc.id:
@@ -112,7 +112,7 @@ def schedule_vc_inactivity(vc: discord.VoiceChannel, delay: int = 60):
 # --- LFG View ---
 class LFGView(discord.ui.View):
     def __init__(self, msg_id, vc, max_players, host_id, host_name, guild_id):
-        super().__init__(timeout=None)  # Persistent
+        super().__init__(timeout=None)
         self.msg_id = msg_id
         self.vc = vc
         self.msg: discord.Message | None = None
@@ -122,82 +122,77 @@ class LFGView(discord.ui.View):
         self.guild_id = guild_id
 
     async def update_embed(self):
-        """Update the embed to show the current squad."""
         if not self.msg or not self.msg.embeds:
             return
         embed = self.msg.embeds[0].copy()
-        squad_data = squads.get(self.guild_id, {}).get(self.msg_id, {})
+        squad_data = squads[self.guild_id].get(self.msg_id, {})
         members = squad_data.get("members", [])
         max_label = "∞" if self.max_players == 0 else str(self.max_players)
         value = "\n".join([f"{i+1}/{max_label} <@{uid}>" for i, uid in enumerate(members)]) or "Empty"
-
         for i, f in enumerate(embed.fields):
             if f.name == "Current Squad":
                 embed.set_field_at(i, name="Current Squad", value=value, inline=False)
                 break
-
         await self.msg.edit(embed=embed)
 
-    def build_view(self):
-        """Always build the full set of buttons."""
+    def build_view(self, member: discord.Member = None):
         view = discord.ui.View(timeout=None)
-        squad_data = squads.get(self.guild_id, {}).get(self.msg_id, {})
+        squad_data = squads[self.guild_id].get(self.msg_id, {})
         members = squad_data.get("members", [])
 
-        join_btn = discord.ui.Button(label="Join", style=discord.ButtonStyle.success, custom_id="lfg_join")
-        leave_btn = discord.ui.Button(label="Leave", style=discord.ButtonStyle.danger, custom_id="lfg_leave")
-        delete_btn = discord.ui.Button(label="Delete", style=discord.ButtonStyle.danger, custom_id="lfg_delete")
+        # Determine if user can join or leave
+        if member:
+            if member.id not in members:
+                view.add_item(discord.ui.Button(label="Join", style=discord.ButtonStyle.success, custom_id="lfg_join"))
+            else:
+                view.add_item(discord.ui.Button(label="Leave", style=discord.ButtonStyle.danger, custom_id="lfg_leave"))
+        else:
+            # default show join and leave for first member if not passed
+            view.add_item(discord.ui.Button(label="Join", style=discord.ButtonStyle.success, custom_id="lfg_join"))
+            view.add_item(discord.ui.Button(label="Leave", style=discord.ButtonStyle.danger, custom_id="lfg_leave"))
 
-        # Optional: disable buttons if squad full or empty
-        if self.max_players != 0 and len(members) >= self.max_players:
-            join_btn.disabled = True
-        if not members:
-            leave_btn.disabled = True
-
-        view.add_item(join_btn)
-        view.add_item(leave_btn)
-
-        view.add_item(delete_btn)
-
+        # Officers or host can delete
+        if member and (is_officer(member) or member.id == self.host_id):
+            view.add_item(discord.ui.Button(label="Delete", style=discord.ButtonStyle.danger, custom_id="lfg_delete"))
         return view
 
     async def interaction_check(self, interaction: discord.Interaction):
-        """Handle button clicks."""
         await interaction.response.defer(ephemeral=True)
-
         if not self.msg:
             await interaction.followup.send("⚠️ LFG post no longer exists.", ephemeral=True)
             return False
 
-        squad_data = squads.get(self.guild_id, {}).get(self.msg_id, {})
-        members = squad_data.get("members", [])
-        user_id = interaction.user.id
         custom_id = interaction.data.get("custom_id")
+        squad_data = squads[self.guild_id].get(self.msg_id, {})
+        members = squad_data.get("members", [])
 
+        # Join
         if custom_id == "lfg_join":
             if self.max_players != 0 and len(members) >= self.max_players:
                 await interaction.followup.send("⚠️ Party is full!", ephemeral=True)
                 return False
-            if user_id not in members:
-                members.append(user_id)
+            if interaction.user.id not in members:
+                members.append(interaction.user.id)
                 squad_data["members"] = members
                 squads[self.guild_id][self.msg_id] = squad_data
             await self.update_embed()
-            await self.msg.edit(view=self.build_view())
+            await interaction.followup.edit_message(self.msg.id, view=self.build_view(interaction.user))
             return False
 
+        # Leave
         elif custom_id == "lfg_leave":
-            if user_id in members:
-                members.remove(user_id)
+            if interaction.user.id in members:
+                members.remove(interaction.user.id)
                 squad_data["members"] = members
                 squads[self.guild_id][self.msg_id] = squad_data
             await self.update_embed()
-            await self.msg.edit(view=self.build_view())
+            await interaction.followup.edit_message(self.msg.id, view=self.build_view(interaction.user))
             return False
 
+        # Delete
         elif custom_id == "lfg_delete":
-            if user_id != self.host_id and not is_officer(interaction.user):
-                await interaction.followup.send("Only the Host or Officers can delete this post.", ephemeral=True)
+            if not is_officer(interaction.user) and interaction.user.id != self.host_id:
+                await interaction.followup.send("Only Officers or the Host can delete this LFG post.", ephemeral=True)
                 return False
 
             if self.vc:
@@ -219,7 +214,6 @@ class LFGView(discord.ui.View):
             return False
 
         return True
-
 
 # --- LFG Modal ---
 class LFGModal(discord.ui.Modal):
@@ -252,7 +246,7 @@ class LFGModal(discord.ui.Modal):
         }
 
         vc_name = self.description.value.strip()
-        temp_vc = await guild.create_voice_channel(name=vc_name, overwrites=overwrites, category=lfg_category)
+        temp_vc = await guild.create_voice_channel(name=vc_name, overwrites=overwrites)
         if user_limit:
             await temp_vc.edit(user_limit=user_limit)
         managed_vcs.add(temp_vc.id)
@@ -276,7 +270,7 @@ class LFGModal(discord.ui.Modal):
 
         view = LFGView(msg.id, temp_vc, max_players, self.user.id, self.host.value, guild_id)
         view.msg = msg
-        await msg.edit(view=view.build_view_for(self.user))
+        await msg.edit(view=view.build_view(self.user))
 
         schedule_vc_inactivity(temp_vc, 60)
         user_active_lfg[self.user.id] = msg.id
@@ -322,7 +316,7 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
                     member.guild.me: discord.PermissionOverwrite(connect=True, manage_channels=True)
                 }
                 vc_name = f"{member.display_name}'s VC"
-                new_vc = await member.guild.create_voice_channel(name=vc_name, overwrites=overwrites, category=after.channel.category)
+                new_vc = await member.guild.create_voice_channel(name=vc_name, overwrites=overwrites)
                 managed_vcs.add(new_vc.id)
                 user_join_create[member.id] = new_vc.id
                 await member.move_to(new_vc)
@@ -335,6 +329,7 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
 async def on_ready():
     print(f"Logged in as {bot.user}")
 
+    # Posting Deploy Button
     for key, data in SERVERS.items():
         posting_ch = bot.get_channel(data.get("posting"))
         if posting_ch:
@@ -345,6 +340,7 @@ async def on_ready():
             else:
                 await posting_ch.send("Click below to create an LFG post:", view=DeployLFGButtonView(key))
 
+    # Restore old LFGs
     for guild_id, posts in squads.items():
         guild = bot.get_guild(guild_id)
         for msg_id, squad_data in posts.items():
@@ -364,9 +360,9 @@ async def on_ready():
                 view = LFGView(msg_id, vc, squad_data.get("max_players", 0), members[0], f"Host-{members[0]}", guild_id)
                 view.msg = msg
                 user_obj = guild.get_member(members[0]) or guild.owner
-                await msg.edit(view=view.build_view_for(user_obj))
-            except:
-                continue
+                await msg.edit(view=view.build_view(user_obj))
+            except Exception as e:
+                print(f"Failed to restore buttons for {msg_id}: {e}")
 
 # --- Run Bot ---
 webserver.keep_alive()
