@@ -87,7 +87,7 @@ def schedule_vc_inactivity(vc: discord.VoiceChannel, delay: int = 60):
 # --- LFG View ---
 class LFGView(discord.ui.View):
     def __init__(self, msg_id, vc, max_players, host_id, host_name, guild_id):
-        super().__init__(timeout=None)
+        super().__init__(timeout=None)  # Persistent
         self.msg_id = msg_id
         self.vc = vc
         self.msg: discord.Message | None = None
@@ -113,11 +113,13 @@ class LFGView(discord.ui.View):
         view = discord.ui.View(timeout=None)
         squad = squads[self.guild_id].get(self.msg_id, [])
 
+        # Show Leave if the member is in the squad, otherwise Join
         if member in squad:
             view.add_item(discord.ui.Button(label="Leave", style=discord.ButtonStyle.danger, custom_id="lfg_leave"))
         else:
             view.add_item(discord.ui.Button(label="Join", style=discord.ButtonStyle.success, custom_id="lfg_join"))
 
+        # Delete button for officers or host
         if is_officer(member) or member.id == self.host_id:
             view.add_item(discord.ui.Button(label="Delete", style=discord.ButtonStyle.danger, custom_id="lfg_delete"))
 
@@ -230,10 +232,10 @@ class LFGModal(discord.ui.Modal):
 # --- Deploy Button ---
 class DeployLFGButtonView(discord.ui.View):
     def __init__(self, guild_key):
-        super().__init__(timeout=None)
+        super().__init__(timeout=None)  # Persistent
         self.guild_key = guild_key
 
-    @discord.ui.button(label="Create LFG Post", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="Create LFG Post", style=discord.ButtonStyle.primary, custom_id="deploy_lfg")
     async def deploy_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(LFGModal(interaction.user, self.guild_key))
 
@@ -282,9 +284,32 @@ async def on_ready():
         if posting_ch:
             async for msg in posting_ch.history(limit=50):
                 if msg.author == bot.user and msg.components:
+                    # Reattach deploy button
+                    await msg.edit(view=DeployLFGButtonView(key))
                     break
             else:
                 await posting_ch.send("Click below to create an LFG post:", view=DeployLFGButtonView(key))
+
+    # Reattach LFG views for active posts
+    for guild_id, posts in squads.items():
+        guild = bot.get_guild(guild_id)
+        for msg_id, members in posts.items():
+            if not members:
+                continue
+            alert_channel = None
+            for key, data in SERVERS.items():
+                if data["server_id"] == guild_id:
+                    alert_channel = bot.get_channel(data["alert"])
+                    break
+            if not alert_channel:
+                continue
+            try:
+                msg = await alert_channel.fetch_message(msg_id)
+                view = LFGView(msg_id, None, 0, members[0].id, members[0].display_name, guild_id)
+                view.msg = msg
+                await msg.edit(view=view.build_view_for(members[0]))
+            except:
+                continue
 
 # --- Run Bot ---
 webserver.keep_alive()
