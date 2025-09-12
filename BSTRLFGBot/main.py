@@ -24,7 +24,7 @@ SERVERS = {
     "main": {
         "server_id": 911035631193444412,
         "alert": 1414759057121873950,
-        "posting": 1414759057121873950,
+        "posting": 1414497675667308564,
         "lfg_category": 1414750850701721703,
         "join_to_create": 1413590729942503474
     },
@@ -270,6 +270,7 @@ async def refresh_lfg(ctx):
 @bot.event
 async def on_voice_state_update(member, before, after):
     try:
+        # Handle VC inactivity for managed VCs
         if before.channel and before.channel.id in managed_vcs and len(before.channel.members) == 0:
             schedule_vc_inactivity(before.channel, 60)
         if after.channel and after.channel.id in managed_vcs:
@@ -287,18 +288,27 @@ async def on_voice_state_update(member, before, after):
                     except:
                         pass
                     return
+
                 overwrites = {
                     member.guild.default_role: discord.PermissionOverwrite(connect=True),
                     member.guild.me: discord.PermissionOverwrite(connect=True, manage_channels=True)
                 }
-                category = member.guild.get_channel(data["lfg_category"])
-                new_vc = await member.guild.create_voice_channel(f"{member.display_name}'s VC", overwrites=overwrites, category=category)
+
+                # Place the new VC in the same category as the join-to-create channel
+                join_category = after.channel.category
+
+                new_vc = await member.guild.create_voice_channel(
+                    f"{member.display_name}'s VC",
+                    overwrites=overwrites,
+                    category=join_category
+                )
                 managed_vcs.add(new_vc.id)
                 user_join_create[member.id] = new_vc.id
                 await member.move_to(new_vc)
                 schedule_vc_inactivity(new_vc, 60)
     except Exception as e:
         await dm_admin(f"Voice state update error: {e}")
+
 
 # --- Bot Ready ---
 @bot.event
