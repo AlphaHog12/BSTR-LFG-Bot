@@ -45,15 +45,17 @@ OFFICER_ROLE_IDS = [
 ]
 
 # --- In-memory storage ---
-squads = {}               # {guild_id: {msg_id: [discord.Member, ...]}}
-managed_vcs = set()        # {vc.id}
-vc_inactivity_tasks = {}   # {vc.id: asyncio.Task}
-user_active_lfg = {}       # {user.id: msg_id}
-user_join_create = {}      # {user.id: vc.id}
+squads = {}  # {guild_id: {msg_id: [discord.Member, ...]}}
+managed_vcs = set()  # {vc.id}
+vc_inactivity_tasks = {}  # {vc.id: asyncio.Task}
+user_active_lfg = {}  # {user.id: msg_id}
+user_join_create = {}  # {user.id: vc.id}
+
 
 # --- Helper Functions ---
 def is_officer(member: discord.Member) -> bool:
     return any(role.id in OFFICER_ROLE_IDS for role in member.roles)
+
 
 async def dm_admin(msg: str):
     try:
@@ -61,6 +63,7 @@ async def dm_admin(msg: str):
         await owner.send(f"[ADMIN DM] {msg}")
     except Exception as e:
         logger.error(f"Failed to DM admin: {e}")
+
 
 async def delete_vc_safe(vc: discord.VoiceChannel):
     try:
@@ -75,6 +78,7 @@ async def delete_vc_safe(vc: discord.VoiceChannel):
         task = vc_inactivity_tasks.pop(vc.id, None)
         if task and not task.done():
             task.cancel()
+
 
 def schedule_vc_inactivity(vc: discord.VoiceChannel, delay: int = 60):
     async def _wait_and_delete():
@@ -93,7 +97,7 @@ def schedule_vc_inactivity(vc: discord.VoiceChannel, delay: int = 60):
         old_task.cancel()
     vc_inactivity_tasks[vc.id] = bot.loop.create_task(_wait_and_delete())
 
-# --- LFG Modal ---
+
 # --- LFG Modal ---
 class LFGModal(discord.ui.Modal):
     def __init__(self, user: discord.Member, guild_key: str):
@@ -102,7 +106,8 @@ class LFGModal(discord.ui.Modal):
         self.guild_key = guild_key
         self.host_input = discord.ui.TextInput(label="Host Name", placeholder="Who is leading?", required=True)
         self.desc_input = discord.ui.TextInput(label="Channel Description", placeholder="Description", required=True)
-        self.max_input = discord.ui.TextInput(label="Max Players (0=unlimited)", placeholder="Enter a number", required=True)
+        self.max_input = discord.ui.TextInput(label="Max Players (0=unlimited)", placeholder="Enter a number",
+                                              required=True)
         self.add_item(self.host_input)
         self.add_item(self.desc_input)
         self.add_item(self.max_input)
@@ -112,7 +117,14 @@ class LFGModal(discord.ui.Modal):
             guild = interaction.guild
             data = SERVERS[self.guild_key]
             alert_channel = guild.get_channel(data["alert"])
+
+            # Get the LFG category and check if it exists
             lfg_category = guild.get_channel(data["lfg_category"])
+            if lfg_category is None:
+                await dm_admin(
+                    f"LFG category ID {data['lfg_category']} not found in {guild.name}. VC creation aborted.")
+                await interaction.response.send_message("⚠️ Cannot create VC: category not found.", ephemeral=True)
+                return
 
             if self.user.id in user_active_lfg and not is_officer(self.user):
                 await interaction.response.send_message("⚠️ You already have an active LFG post.", ephemeral=True)
@@ -140,9 +152,10 @@ class LFGModal(discord.ui.Modal):
             embed.add_field(name="Current Squad", value=f"1/{max_label} {self.user.mention}", inline=False)
             embed.add_field(name="Max Party Size", value=max_label, inline=False)
 
-            # Create LFG view WITHOUT vc reference
+            # Create LFG view
             view = LFGView(msg_id=None, max_players=max_players, host_id=self.user.id)
-            msg = await alert_channel.send(content=f"{self.user.mention} is looking for a group!", embed=embed, view=view)
+            msg = await alert_channel.send(content=f"{self.user.mention} is looking for a group!", embed=embed,
+                                           view=view)
             view.msg = msg
             view.msg_id = msg.id
 
@@ -179,7 +192,7 @@ class LFGView(discord.ui.View):
         squad = squads.get(guild_id, {}).get(self.msg_id, [])
         embed = msg.embeds[0].copy()
         max_label = "∞" if self.max_players == 0 else str(self.max_players)
-        value = "\n".join([f"{i+1}/{max_label} {m.mention}" for i, m in enumerate(squad)]) or "Empty"
+        value = "\n".join([f"{i + 1}/{max_label} {m.mention}" for i, m in enumerate(squad)]) or "Empty"
         for i, f in enumerate(embed.fields):
             if f.name == "Current Squad":
                 embed.set_field_at(i, name="Current Squad", value=value, inline=False)
@@ -221,6 +234,7 @@ class LFGView(discord.ui.View):
             pass
         await interaction.response.send_message("✅ LFG post deleted.", ephemeral=True)
 
+
 # --- Deploy Button ---
 class DeployLFGButtonView(discord.ui.View):
     def __init__(self, guild_key: str):
@@ -231,13 +245,11 @@ class DeployLFGButtonView(discord.ui.View):
     async def deploy_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(LFGModal(interaction.user, self.guild_key))
 
+
 # --- Backup/Cleanup Command ---
 @bot.command()
 @commands.is_owner()
 async def refresh_lfg(ctx):
-    """
-    Removes old buttons/posts in posting channels and reposts a persistent "Create LFG Post" button.
-    """
     try:
         for guild_key, data in SERVERS.items():
             guild = bot.get_guild(data["server_id"])
@@ -248,7 +260,6 @@ async def refresh_lfg(ctx):
             if not post_channel:
                 continue
 
-            # Remove old buttons in posting channel
             messages = [msg async for msg in post_channel.history(limit=100)]
             for msg in messages:
                 if msg.components:
@@ -257,7 +268,6 @@ async def refresh_lfg(ctx):
                     except:
                         pass
 
-            # Post fresh "Create LFG Post" button
             view = DeployLFGButtonView(guild_key)
             await post_channel.send("Click the button below to create an LFG post!", view=view)
 
@@ -266,11 +276,11 @@ async def refresh_lfg(ctx):
         await dm_admin(f"refresh_lfg command failed: {e}")
         await ctx.send(f"⚠️ Failed to refresh LFG: {e}")
 
+
 # --- Voice State Updates ---
 @bot.event
 async def on_voice_state_update(member, before, after):
     try:
-        # Handle VC inactivity for managed VCs
         if before.channel and before.channel.id in managed_vcs and len(before.channel.members) == 0:
             schedule_vc_inactivity(before.channel, 60)
         if after.channel and after.channel.id in managed_vcs:
@@ -293,10 +303,7 @@ async def on_voice_state_update(member, before, after):
                     member.guild.default_role: discord.PermissionOverwrite(connect=True),
                     member.guild.me: discord.PermissionOverwrite(connect=True, manage_channels=True)
                 }
-
-                # Place the new VC in the same category as the join-to-create channel
                 join_category = after.channel.category
-
                 new_vc = await member.guild.create_voice_channel(
                     f"{member.display_name}'s VC",
                     overwrites=overwrites,
@@ -316,6 +323,7 @@ async def on_ready():
     for guild_key in SERVERS:
         bot.add_view(DeployLFGButtonView(guild_key))
     print(f"✅ Logged in as {bot.user}")
+
 
 # --- Keep bot alive & run ---
 webserver.keep_alive()
